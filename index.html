@@ -246,6 +246,30 @@ body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size:14px
 .hcr-status.s-watch{background:var(--amber-dim);color:var(--amber)}
 .hcr-status.s-over {background:var(--red-dim);color:var(--red)}
 .hcr-divergence{margin-top:9px;padding:7px 10px;border-radius:6px;font-size:11px;font-family:var(--mono);line-height:1.4}
+
+/* Unified recommendation card */
+.rec-card{padding:14px 16px;border:1px solid;border-radius:10px;margin-bottom:10px;transition:background .25s,border-color .25s}
+.rec-flex {background:var(--blue-dim);  border-color:var(--blue-line)}
+.rec-hold {background:var(--green-dim); border-color:var(--green-line)}
+.rec-watch{background:var(--amber-dim);border-color:var(--amber-line)}
+.rec-call {background:var(--red-dim);   border-color:var(--red-line)}
+.rec-tag{font-size:9px;font-weight:600;letter-spacing:.12em;font-family:var(--mono);margin-bottom:4px}
+.rec-flex .rec-tag {color:var(--blue)}
+.rec-hold .rec-tag {color:var(--green)}
+.rec-watch .rec-tag {color:var(--amber)}
+.rec-call .rec-tag {color:var(--red)}
+.rec-headline{font-size:18px;font-weight:600;line-height:1.25;margin-bottom:5px}
+.rec-flex .rec-headline {color:var(--blue)}
+.rec-hold .rec-headline {color:var(--green)}
+.rec-watch .rec-headline {color:var(--amber)}
+.rec-call .rec-headline {color:var(--red)}
+.rec-explain{font-size:12px;color:var(--t1);line-height:1.45;margin-bottom:8px;opacity:.92}
+.rec-numbers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.08)}
+.rec-num-cell{text-align:center;padding:5px 6px}
+.rec-num-lbl{font-size:9px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--t2);font-family:var(--mono);margin-bottom:3px}
+.rec-num-val{font-size:18px;font-weight:600;font-family:var(--mono);line-height:1}
+.rec-num-sub{font-size:9px;color:var(--t3);font-family:var(--mono);margin-top:2px}
+.rec-modifier{font-size:11px;color:var(--t2);font-family:var(--mono);margin-top:8px;padding:5px 8px;border-radius:5px;background:rgba(255,255,255,0.04);font-style:italic;line-height:1.4}
 .hcr-div-good {background:var(--green-dim);color:var(--green);border:1px solid var(--green-line)}
 .hcr-div-warn {background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-line)}
 .ape-zones{display:flex;justify-content:space-between;font-size:9px;color:var(--t3);font-family:var(--mono)}
@@ -1192,36 +1216,65 @@ function go(){
   const recMax=Math.ceil(totalApe/5.5);
   const diff=rn-rec;
 
-  // Signal — ratio-based:
-  //   CALL IN  if APE/RN > 5.5
-  //   WATCH    if APE/RN > 4.0
-  //   FLEX OFF if dropping one or more RNs keeps APE/RN ≤ 4.0
-  //   OPTIMAL  otherwise
-  let key='optimal';
-  let flexCount=0;
-  if(apeRn>5.5) key='callIn';
-  else if(apeRn>4.0) key='watch';
-  else {
-    let testRn=rn-1;
-    while(testRn>=1 && totalApe/testRn<=4.0){ flexCount++; testRn--; }
-    if(flexCount>0) key='flex';
+  // ── Unified signal: headcount drives, APE modifies ──
+  // Headcount bands (literal patients per RN):
+  //   < 3.95   → FLEX (under 4:1, eligible to flex)
+  //   3.95–4.05 → OPTIMAL (at 4:1 target)
+  //   4.06–5.0 → WATCH (over target, still safe)
+  //   > 5.0    → CALL IN (over headcount max)
+  // APE modifier (one notch only, never overrides safety):
+  //   APE/RN > 5.0 (heavy acuity) → bump up one (more cautious)
+  //   APE/RN < 4.0 (light acuity) → bump down one (more permissive)
+  const ppr = rn > 0 ? totalPts / rn : 0;
+  // Bands as integer indices: 0=flex, 1=optimal, 2=watch, 3=callIn
+  let baseBand;
+  if(ppr <= 0) baseBand = 1;        // no patients → optimal
+  else if(ppr < 3.95) baseBand = 0; // flex
+  else if(ppr <= 4.05) baseBand = 1; // optimal
+  else if(ppr <= 5.0) baseBand = 2;  // watch
+  else baseBand = 3;                 // callIn
+  // APE modifier
+  let apeMod = 0;
+  let apeModReason = '';
+  if(rn > 0 && apeRn > 0){
+    if(apeRn > 5.0 && baseBand < 3){
+      apeMod = +1;
+      apeModReason = `acuity heavy (${n(apeRn,2)} APE/RN)`;
+    } else if(apeRn < 4.0 && baseBand > 0){
+      apeMod = -1;
+      apeModReason = `acuity light (${n(apeRn,2)} APE/RN)`;
+    }
   }
-
-  const callinNeed=Math.max(1,rec-rn);
-  const watchOver=apeRn-4.0;
-  const SCFG={
-    optimal:{cls:'s-ok',  icon:'✓',tag:'OPTIMAL',  msg:`At target — ${n(apeRn,2)}:1 APE per RN`},
-    watch:  {cls:'s-watch',icon:'!',tag:'WATCH',   msg:`${n(apeRn,2)}:1 — above 4:1 target by ${n(watchOver,2)}`},
-    callIn: {cls:'s-call',icon:'⚠',tag:'CALL IN',  msg:`${n(apeRn,2)}:1 — unsafe; ${callinNeed} more RN${callinNeed!==1?'s':''} needed`},
-    flex:   {cls:'s-flex',icon:'↓',tag:'FLEX OFF', msg:`${flexCount} RN${flexCount!==1?'s':''} can flex — below 4:1 target`},
+  const finalBand = Math.max(0, Math.min(3, baseBand + apeMod));
+  const bandKeys = ['flex','optimal','watch','callIn'];
+  const key = bandKeys[finalBand];
+  // How many RNs could flex while keeping ppr at or below 4.0
+  let flexCount = 0;
+  if(rn > 1){
+    let testRn = rn - 1;
+    while(testRn >= 1 && totalPts/testRn <= 4.0){ flexCount++; testRn--; }
+  }
+  // How many RNs needed to bring ppr to ≤ 4.0
+  const callinNeed = ppr > 4.0 ? Math.ceil(totalPts/4.0 - rn) : 0;
+  // Display strings — lead with headcount, append APE-modifier note when active
+  const apeNote = apeMod !== 0 ? ` · adjusted for ${apeModReason}` : '';
+  const SCFG = {
+    optimal: {cls:'s-ok',   icon:'✓', tag:'OPTIMAL',
+              msg: ppr>0 ? `At target — ${n(ppr,2)} pts per RN${apeNote}` : `At target — staffing matches workload${apeNote}`},
+    watch:   {cls:'s-watch',icon:'!', tag:'WATCH',
+              msg:`${n(ppr,2)} pts per RN — above 4:1 target${apeNote}`},
+    callIn:  {cls:'s-call', icon:'⚠', tag:'CALL IN',
+              msg:`${n(ppr,2)} pts per RN — over 5:1 max${callinNeed>0?`; ${callinNeed} more RN${callinNeed!==1?'s':''} needed`:''}${apeNote}`},
+    flex:    {cls:'s-flex', icon:'↓', tag:'FLEX OFF',
+              msg: flexCount>0 ? `Flex ${flexCount} RN${flexCount!==1?'s':''} — ${n(ppr,2)} pts per RN${apeNote}` : `Eligible to flex — ${n(ppr,2)} pts per RN${apeNote}`},
   };
-  const cfg=SCFG[key];
-  g('sig').className='signal '+cfg.cls;
-  g('sigI').textContent=cfg.icon;
-  g('sigT').textContent=cfg.tag;
-  g('sigM').textContent=cfg.msg;
-  g('sigS').textContent=`${rn} assignable · rec ${rec} for 4:1 target · max-safe ${recMax}`;
-  g('recN').textContent=rec;
+  const sigCfg = SCFG[key];
+  g('sig').className = 'signal ' + sigCfg.cls;
+  g('sigI').textContent = sigCfg.icon;
+  g('sigT').textContent = sigCfg.tag;
+  g('sigM').textContent = sigCfg.msg;
+  g('sigS').textContent = `${rn} assignable · ${totalPts} pts (${n(apeRn,2)} APE/RN) · target 4:1 · max 5:1`;
+  g('recN').textContent = rec;
 
   // 2hr projection
   let arr2=0;
@@ -1312,9 +1365,7 @@ function go(){
   // ── Literal headcount ratio (separate from APE) ──
   // Counts actual roomed patients (not boarders, since boarders are typically less hands-on
   // for the assignable RN pool — they're also weighted lower in APE on purpose).
-  // PPR = totalPts / rn = average patient load per assignable RN.
-  // Status bands match the safety language: ≤4.0 good, ≤5.0 watch, >5.0 over.
-  const ppr = rn > 0 ? totalPts / rn : 0;
+  // PPR is computed up at the signal-bar block; reuse it here.
   // For display, show as ratio "X.X : 1"
   g('hcrPpr').textContent = ppr > 0 ? ppr.toFixed(2) : '—';
   g('hcrApe').textContent = apeRn > 0 ? apeRn.toFixed(2) : '—';
